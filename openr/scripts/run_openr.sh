@@ -37,7 +37,7 @@
 #
 
 # OpenR binary path or command name present on bin paths
-OPENR=openr
+OPENR=openr_bin
 
 # Keep this list in sorted order
 ALLOC_PREFIX_LEN=128
@@ -65,7 +65,7 @@ ENABLE_SECURE_THRIFT_SERVER=false
 ENABLE_SEGMENT_ROUTING=false
 ENABLE_SPARK=true
 ENABLE_SUBNET_VALIDATION=true
-ENABLE_V4=false
+ENABLE_V4=true
 ENABLE_WATCHDOG=true
 FIB_HANDLER_PORT=60100
 HEALTH_CHECKER_PING_INTERVAL_S=3

@@ -12,7 +12,7 @@ namespace py3 openr.thrift
 namespace php Openr
 
 include "common/fb303/if/fb303.thrift"
-include "fbzmq/service/if/Monitor.thrift"
+include "build/deps/fbzmq/fbzmq/service/if/Monitor.thrift"
 include "Decision.thrift"
 include "Dual.thrift"
 include "Fib.thrift"

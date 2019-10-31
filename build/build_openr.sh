@@ -29,7 +29,7 @@ install_zstd() {
     git clone https://github.com/facebook/zstd
   fi
   cd zstd
-  make
+  make -j2
   sudo make install
   sudo ldconfig
   popd
@@ -42,7 +42,7 @@ install_mstch() {
   fi
   cd mstch
   cmake -DBUILD_SHARED_LIBS=ON -DCMAKE_CXX_FLAGS="-fPIC" .
-  make
+  make -j2
   sudo make install
   sudo ldconfig
   popd
@@ -63,7 +63,7 @@ install_wangle() {
     -DFOLLY_INCLUDE_DIR=$DESTDIR/usr/local/include \
     -DFOLLY_LIBRARY=$DESTDIR/usr/local/lib \
     -DBUILD_TESTS=OFF .
-  make
+  make -j2
   sudo make install
   sudo ldconfig
   popd
@@ -76,10 +76,10 @@ install_libzmq() {
   fi
   cd libzmq
   git fetch origin
-  git checkout v4.2.2
+  git checkout latest_release # v4.2.2
   ./autogen.sh
   ./configure
-  make
+  make -j2
   sudo make install
   sudo ldconfig
   popd
@@ -92,7 +92,7 @@ install_libsodium() {
   fi
   cd libsodium
   ./configure
-  make
+  make -j2
   sudo make install
   sudo ldconfig
   popd
@@ -110,7 +110,7 @@ install_folly() {
     git checkout "$rev"
   fi
   cmake -DBUILD_SHARED_LIBS=ON -DCMAKE_CXX_FLAGS="-fPIC" ..
-  make
+  make -j2
   sudo make install
   sudo ldconfig
   popd
@@ -128,7 +128,7 @@ install_fizz() {
     git checkout "$rev"
   fi
   cmake -DBUILD_SHARED_LIBS=ON -DCMAKE_CXX_FLAGS="-fPIC" ../fizz
-  make
+  make -j2
   sudo make install
   sudo ldconfig
   popd
@@ -145,23 +145,26 @@ install_fbthrift() {
     git fetch origin
     git checkout "$rev"
   fi
-  cmake -DBUILD_SHARED_LIBS=ON ..
-  make
+  cmake -DBUILD_SHARED_LIBS=ON -DCMAKE_CXX_FLAGS="-fPIC" ..
+  make -j2
   sudo make install
   sudo ldconfig
   cd ../thrift/lib/py
-  sudo python setup.py install
+  sudo python3 setup.py install
   popd
 }
 
 install_sigar() {
   pushd .
-  if [[ ! -e "sigar" ]]; then
-    git clone https://github.com/hyperic/sigar/
+  if [[ -e "sigar" ]]; then
+    rm -R sigar
   fi
+  git clone https://github.com/hyperic/sigar/
   cd sigar
+  git apply  ../../patches/sigar.patch
   ./autogen.sh
-  ./configure --disable-shared CFLAGS='-fgnu89-inline'
+  ./configure --disable-shared CFLAGS='-fgnu89-inline -fPIC'
+  make -j2
   sudo make install
   sudo ldconfig
   popd
@@ -173,23 +176,23 @@ install_fbzmq() {
     git clone https://github.com/facebook/fbzmq.git
   fi
   rev=$(find_github_hash facebook/fbzmq)
-  cd fbzmq/build
+  cd fbzmq
   if [[ ! -z "$rev" ]]; then
     git fetch origin
     git checkout "$rev"
   fi
   cmake \
-    -DCMAKE_CXX_FLAGS="-Wno-sign-compare -Wno-unused-parameter" \
-    -DBUILD_SHARED_LIBS=OFF \
+    -DCMAKE_CXX_FLAGS="-fPIC" \
+    -DBUILD_SHARED_LIBS=ON \
     -DCMAKE_EXE_LINKER_FLAGS="-static" \
     -DCMAKE_FIND_LIBRARY_SUFFIXES=".a" \
     -DBUILD_TESTS=OFF \
     ../fbzmq/
-  make
+  make -j2
   sudo make install
   sudo ldconfig
-  cd ../fbzmq/py
-  sudo python setup.py install
+  cd fbzmq/py
+  sudo python3 setup.py install
   popd
 }
 
@@ -203,7 +206,7 @@ install_glog() {
   git checkout v0.3.5
   set -eu && autoreconf -i
   ./configure
-  make
+  make -j2
   sudo make install
   sudo ldconfig
   popd
@@ -222,7 +225,22 @@ install_gflags() {
   fi
   cd mybuild
   cmake -DBUILD_SHARED_LIBS=ON ..
-  make
+  make -j2
+  sudo make install
+  sudo ldconfig
+  popd
+}
+
+install_yarpl() {
+  pushd .
+  if [[ -e "rsocket" ]]; then
+  rm -R rsocket
+  fi
+  git clone https://github.com/rsocket/rsocket-cpp.git rsocket
+  cd rsocket/yarpl
+  git apply ../../../patches/yarpl.patch
+  cmake -DCMAKE_BUILD_TYPE=DEBUG -DCMAKE_CXX_FLAGS="-fPIC" ../
+  make -j2
   sudo make install
   sudo ldconfig
   popd
@@ -238,12 +256,12 @@ install_gtest() {
   git checkout release-1.8.0
   cd googletest
   cmake .
-  make
+  make -j2
   sudo make install
   sudo ldconfig
   cd ../googlemock
   cmake .
-  make
+  make -j2
   sudo make install
   sudo ldconfig
   popd
@@ -260,7 +278,7 @@ install_re2() {
   fi
   cd mybuild
   cmake ..
-  make
+  make -j2
   sudo make install
   sudo ldconfig
   popd
@@ -274,13 +292,13 @@ install_libnl() {
     cd libnl
     git fetch origin
     git checkout libnl3_2_25
-    git apply ../../fix-route-obj-attr-list.patch
+    git apply ../../patches/fix-route-obj-attr-list.patch
     cd ..
   fi
   cd libnl
   ./autogen.sh
   ./configure
-  make
+  make -j2
   sudo make install
   sudo ldconfig
   popd
@@ -296,7 +314,7 @@ install_krb5() {
   git checkout krb5-1.16.1-final
   set -eu && autoreconf -i
   ./configure
-  make
+  make -j2
   sudo make install
   sudo ldconfig
   popd
@@ -305,22 +323,27 @@ install_krb5() {
 install_openr() {
   pushd .
   cd "$BUILD_DIR"
+  cd ..
   cmake \
     -DBUILD_SHARED_LIBS=OFF \
-    -DBUILD_TESTS=ON \
-    -DADD_ROOT_TESTS=ON \
+    -DBUILD_TESTS=OFF \
+    -DADD_ROOT_TESTS=OFF \
     -DCMAKE_CXX_FLAGS="-Wno-unused-parameter -fPIC" \
     ../openr/
-  make
+  make -j2
   sudo make install
   sudo chmod +x "/usr/local/sbin/run_openr.sh"
   cd "$BUILD_DIR/../openr/py"
-  sudo pip install cffi
-  sudo pip install future
-  python setup.py build
-  sudo python setup.py install
+  sudo pip3 install 'networkx==2.4'
+  sudo pip3 install bunch
+  sudo pip3 install cffi
+  sudo pip3 install futures
+  sudo pip3 install click
+  sudo pip3 install hexdump
+  
+  python3 setup.py build
+  sudo python3 setup.py install
   cd "$BUILD_DIR"
-  make test
   popd
 }
 
@@ -334,6 +357,8 @@ sudo apt-get install -y libdouble-conversion-dev \
   make \
   zip \
   git \
+  libsox-fmt-all \
+  libfmt-dev \
   autoconf \
   autoconf-archive \
   automake \
@@ -354,9 +379,9 @@ sudo apt-get install -y libdouble-conversion-dev \
   binutils-dev \
   libjemalloc-dev \
   libiberty-dev \
-  python-setuptools \
   python3-setuptools \
-  python-pip
+  python3-setuptools \
+  python3-pip
 
 #
 # install other dependencies from source
@@ -368,9 +393,10 @@ install_gtest
 install_mstch
 install_zstd
 install_folly
+install_yarpl
+install_libsodium
 install_fizz
 install_wangle
-install_libsodium
 install_libzmq
 install_libnl
 install_krb5
