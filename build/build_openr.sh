@@ -336,6 +336,7 @@ install_openr() {
   cd "$BUILD_DIR/../openr/py"
   sudo pip3 install 'networkx==2.4'
   sudo pip3 install bunch
+  sudo pip3 install zstandard
   sudo pip3 install cffi
   sudo pip3 install futures
   sudo pip3 install click
