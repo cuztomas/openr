@@ -334,7 +334,8 @@ install_openr() {
   sudo make install
   sudo chmod +x "/usr/local/sbin/run_openr.sh"
   cd "$BUILD_DIR/../openr/py"
-  sudo pip3 install 'networkx==2.4'
+  sudo pip3 install networkx
+  sudo pip3 install matplotlib
   sudo pip3 install bunch
   sudo pip3 install zstandard
   sudo pip3 install cffi
