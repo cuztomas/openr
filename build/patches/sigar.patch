@@ -1,0 +1,73 @@
+diff --git a/examples/cpuinfo.c b/examples/cpuinfo.c
+index 9ec15bfd..ba380d3c 100644
+--- a/examples/cpuinfo.c
++++ b/examples/cpuinfo.c
+@@ -15,7 +15,7 @@
+  */
+ 
+ #include <stdio.h>
+-
++#include <stdlib.h>
+ #include "sigar.h"
+ 
+ int main(int argc, char **argv) {
+diff --git a/examples/sigar_ps.c b/examples/sigar_ps.c
+index 972f0edc..4a8722b6 100644
+--- a/examples/sigar_ps.c
++++ b/examples/sigar_ps.c
+@@ -15,7 +15,7 @@
+  */
+ 
+ #include <stdio.h>
+-
++#include <stdlib.h>
+ #include "sigar.h"
+ 
+ int main(int argc, char **argv) {
+diff --git a/go_bindings/Sigar/include/sigar_private.h b/go_bindings/Sigar/include/sigar_private.h
+index 11e62cd8..00c3f029 100644
+--- a/go_bindings/Sigar/include/sigar_private.h
++++ b/go_bindings/Sigar/include/sigar_private.h
+@@ -74,7 +74,7 @@
+ #if defined(WIN32)
+ #   define SIGAR_INLINE __inline
+ #elif defined(__GNUC__)
+-#   define SIGAR_INLINE inline
++#   define SIGAR_INLINE
+ #else
+ #   define SIGAR_INLINE
+ #endif
+diff --git a/src/os/linux/linux_sigar.c b/src/os/linux/linux_sigar.c
+index a3fd2301..395792b7 100644
+--- a/src/os/linux/linux_sigar.c
++++ b/src/os/linux/linux_sigar.c
+@@ -29,6 +29,8 @@
+ #include "sigar_private.h"
+ #include "sigar_util.h"
+ #include "sigar_os.h"
++#include <sys/sysmacros.h>
++
+ 
+ #define pageshift(x) ((x) << sigar->pagesize)
+ 
+diff --git a/src/sigar_util.c b/src/sigar_util.c
+index 3c668fc6..8b7e6314 100644
+--- a/src/sigar_util.c
++++ b/src/sigar_util.c
+@@ -54,14 +54,14 @@ SIGAR_INLINE char *sigar_skip_line(char *buffer, int buflen)
+     return ++ptr;
+ }
+ 
+-SIGAR_INLINE char *sigar_skip_token(char *p)
++char *sigar_skip_token(char *p)
+ {
+     while (sigar_isspace(*p)) p++;
+     while (*p && !sigar_isspace(*p)) p++;
+     return p;
+ }
+ 
+-SIGAR_INLINE char *sigar_skip_multiple_token(char *p, int count)
++char *sigar_skip_multiple_token(char *p, int count)
+ {
+     int i;
+     
