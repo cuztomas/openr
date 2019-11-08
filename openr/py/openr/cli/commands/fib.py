@@ -8,7 +8,7 @@
 #
 
 from builtins import object
-from typing import Any, List
+from typing import Any, List, Optional
 
 from openr.cli.utils import utils
 from openr.cli.utils.commands import OpenrCtrlCmd
@@ -83,12 +83,19 @@ class FibCountersCmd(FibAgentCmd):
 
 
 class FibRoutesInstalledCmd(FibAgentCmd):
-    def run(self, prefixes: List[str], labels: List[int], json_opt: bool = False):
+    def run(
+        self,
+        prefixes: List[str],
+        labels: List[int],
+        json_opt: bool = False,
+        client_id: Optional[int] = None,
+    ):
         routes = []
         mpls_routes = []
+        client_id = client_id if client_id is not None else self.client.client_id
 
         try:
-            routes = self.client.getRouteTableByClient(self.client.client_id)
+            routes = self.client.getRouteTableByClient(client_id)
         except Exception as e:
             print("Failed to get routes from Fib.")
             print("Exception: {}".format(e))
@@ -96,10 +103,9 @@ class FibRoutesInstalledCmd(FibAgentCmd):
 
         with utils.get_openr_ctrl_client(self.cli_opts.host, self.cli_opts) as client:
             host_id = client.getMyNodeName()
-        client_id = self.client.client_id
 
         try:
-            mpls_routes = self.client.getMplsRouteTableByClient(self.client.client_id)
+            mpls_routes = self.client.getMplsRouteTableByClient(client_id)
         except Exception as e:
             print("Pls check Open/R version. Exception: {}".format(e))
 
@@ -179,12 +185,10 @@ class FibValidateRoutesCmd(FibAgentCmd):
                 # fetch link_db from link-monitor module
                 lm_links = client.getInterfaces().interfaceDetails
 
-            (decision_unicast_routes, decision_mpls_routes) = utils.get_shortest_routes(
+            (decision_unicast_routes, decision_mpls_routes) = utils.get_routes(
                 decision_route_db
             )
-            (fib_unicast_routes, fib_mpls_routes) = utils.get_shortest_routes(
-                fib_route_db
-            )
+            (fib_unicast_routes, fib_mpls_routes) = utils.get_routes(fib_route_db)
             # fetch route from net_agent module
             agent_unicast_routes = self.client.getRouteTableByClient(
                 self.client.client_id
