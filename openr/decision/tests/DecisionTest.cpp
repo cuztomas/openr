@@ -41,6 +41,8 @@ const auto adj12 =
     createAdjacency("2", "1/2", "2/1", "fe80::2", "192.168.0.2", 10, 100002);
 const auto adj13 =
     createAdjacency("3", "1/3", "3/1", "fe80::3", "192.168.0.3", 10, 100003);
+const auto adj14 =
+    createAdjacency("4", "1/4", "4/1", "fe80::4", "192.168.0.4", 10, 100004);
 const auto adj12_old_1 =
     createAdjacency("2", "1/2", "2/1", "fe80::2", "192.168.0.2", 10, 1000021);
 const auto adj12_old_2 =
@@ -68,6 +70,8 @@ const auto adj32 =
 const auto adj34 =
     createAdjacency("4", "3/4", "4/3", "fe80::4", "192.168.0.4", 10, 100004);
 // R4 -> R2, R3
+const auto adj41 =
+    createAdjacency("1", "4/1", "1/4", "fe80::1", "192.168.0.1", 10, 100001);
 const auto adj42 =
     createAdjacency("2", "4/2", "2/4", "fe80::2", "192.168.0.2", 10, 100002);
 const auto adj43 =
@@ -724,15 +728,15 @@ TEST(BGPRedistribution, BasicOperation) {
   }
 
   // only node1 advertises the BGP prefix, it will have the best path
-  prefixDb1WithBGP.prefixEntries.emplace_back(
-      FRAGILE,
+  prefixDb1WithBGP.prefixEntries.push_back(createPrefixEntry(
       bgpPrefix1,
       thrift::PrefixType::BGP,
       data1,
       thrift::PrefixForwardingType::IP,
       thrift::PrefixForwardingAlgorithm::SP_ECMP,
       false,
-      mv1);
+      mv1,
+      folly::none));
 
   EXPECT_TRUE(spfSolver.updatePrefixDatabase(prefixDb1WithBGP));
   EXPECT_TRUE(spfSolver.updatePrefixDatabase(prefixDb2WithBGP));
@@ -753,15 +757,15 @@ TEST(BGPRedistribution, BasicOperation) {
   // add the prefix to node2 with the same metric vector. we expect the bgp
   // route to be gone since both nodes have same metric vector we can't
   // determine a best path
-  prefixDb2WithBGP.prefixEntries.emplace_back(
-      FRAGILE,
+  prefixDb2WithBGP.prefixEntries.push_back(createPrefixEntry(
       bgpPrefix1,
       thrift::PrefixType::BGP,
       data2,
       thrift::PrefixForwardingType::IP,
       thrift::PrefixForwardingAlgorithm::SP_ECMP,
       false,
-      mv2);
+      mv2,
+      folly::none));
   EXPECT_TRUE(spfSolver.updatePrefixDatabase(prefixDb2WithBGP));
   routeDb = spfSolver.buildPaths("1");
   EXPECT_THAT(routeDb.value().unicastRoutes, testing::SizeIs(1));
@@ -1269,6 +1273,182 @@ TEST(ConnectivityTest, CompatibilityNodeTest) {
 
   adjacencyDb1 = createAdjDb("1", {adj12_old_2, adj13_old}, 0);
   EXPECT_FALSE(spfSolver.updateAdjacencyDatabase(adjacencyDb1).first);
+}
+
+//
+// Test topology:
+//
+//  1------2
+//  | \     |
+//  |   \   |
+//  3------4
+//
+// Test both IP v4 & v6
+// 1,2,3,4 are simply meshed with each other with 1 parallet links
+//
+class SimpleRingMeshTopologyFixture
+    : public ::testing::TestWithParam<
+          std::tuple<bool, folly::Optional<thrift::PrefixType>>> {
+ public:
+  SimpleRingMeshTopologyFixture() : v4Enabled(std::get<0>(GetParam())) {}
+
+ protected:
+  void
+  CustomSetUp(
+      bool calculateLfas,
+      bool useKsp2Ed,
+      folly::Optional<thrift::PrefixType> prefixType = folly::none,
+      bool createNewBgpRoute = false) {
+    std::string nodeName("1");
+    spfSolver = std::make_unique<SpfSolver>(nodeName, v4Enabled, calculateLfas);
+    adjacencyDb1 = createAdjDb("1", {adj12, adj13, adj14}, 1);
+    adjacencyDb2 = createAdjDb("2", {adj21, adj23, adj24}, 2);
+    adjacencyDb3 = createAdjDb("3", {adj31, adj32, adj34}, 3);
+    adjacencyDb4 = createAdjDb("4", {adj41, adj42, adj43}, 4);
+
+    EXPECT_EQ(
+        std::make_pair(false, true),
+        spfSolver->updateAdjacencyDatabase(adjacencyDb1));
+    EXPECT_EQ(
+        std::make_pair(true, false),
+        spfSolver->updateAdjacencyDatabase(adjacencyDb2));
+    EXPECT_EQ(
+        std::make_pair(true, false),
+        spfSolver->updateAdjacencyDatabase(adjacencyDb3));
+    EXPECT_EQ(
+        std::make_pair(true, false),
+        spfSolver->updateAdjacencyDatabase(adjacencyDb4));
+
+    auto pdb1 = v4Enabled ? prefixDb1V4 : prefixDb1;
+    auto pdb2 = v4Enabled ? prefixDb2V4 : prefixDb2;
+    auto pdb3 = v4Enabled ? prefixDb3V4 : prefixDb3;
+    auto pdb4 = v4Enabled ? prefixDb4V4 : prefixDb4;
+
+    auto bgp1 = v4Enabled ? bgpAddr1V4 : bgpAddr1;
+    auto bgp2 = v4Enabled ? bgpAddr2V4 : bgpAddr2;
+    auto bgp3 = v4Enabled ? bgpAddr3V4 : bgpAddr3;
+    auto bgp4 = v4Enabled ? bgpAddr4V4 : bgpAddr4;
+
+    EXPECT_TRUE(spfSolver->updatePrefixDatabase(
+        useKsp2Ed ? getPrefixDbWithKspfAlgo(
+                        pdb1,
+                        prefixType,
+                        createNewBgpRoute
+                            ? folly::make_optional<thrift::IpPrefix>(bgp1)
+                            : folly::none)
+                  : pdb1));
+    EXPECT_TRUE(spfSolver->updatePrefixDatabase(
+        useKsp2Ed ? getPrefixDbWithKspfAlgo(
+                        pdb2,
+                        prefixType,
+                        createNewBgpRoute
+                            ? folly::make_optional<thrift::IpPrefix>(bgp2)
+                            : folly::none)
+                  : pdb2));
+    EXPECT_TRUE(spfSolver->updatePrefixDatabase(
+        useKsp2Ed ? getPrefixDbWithKspfAlgo(
+                        pdb3,
+                        prefixType,
+                        createNewBgpRoute
+                            ? folly::make_optional<thrift::IpPrefix>(bgp3)
+                            : folly::none)
+                  : pdb3));
+    EXPECT_TRUE(spfSolver->updatePrefixDatabase(
+        useKsp2Ed ? getPrefixDbWithKspfAlgo(
+                        pdb4,
+                        prefixType,
+                        createNewBgpRoute
+                            ? folly::make_optional<thrift::IpPrefix>(bgp4)
+                            : folly::none)
+                  : pdb4));
+  }
+
+  thrift::AdjacencyDatabase adjacencyDb1, adjacencyDb2, adjacencyDb3,
+      adjacencyDb4;
+
+  bool v4Enabled{false};
+
+  std::unique_ptr<SpfSolver> spfSolver;
+};
+
+INSTANTIATE_TEST_CASE_P(
+    SimpleRingMeshTopologyInstance,
+    SimpleRingMeshTopologyFixture,
+    ::testing::Values(
+        std::make_tuple(true, folly::none),
+        std::make_tuple(false, folly::none),
+        std::make_tuple(true, thrift::PrefixType::BGP),
+        std::make_tuple(false, thrift::PrefixType::BGP)));
+
+TEST_P(SimpleRingMeshTopologyFixture, Ksp2EdEcmp) {
+  CustomSetUp(
+      false /* multipath - ignored */,
+      true /* useKsp2Ed */,
+      std::get<1>(GetParam()));
+  auto routeMap = getRouteMap(*spfSolver, {"1"});
+
+  auto pushCode = thrift::MplsActionCode::PUSH;
+  auto push1 = createMplsAction(pushCode, folly::none, std::vector<int32_t>{1});
+  auto push2 = createMplsAction(pushCode, folly::none, std::vector<int32_t>{2});
+  auto push3 = createMplsAction(pushCode, folly::none, std::vector<int32_t>{3});
+  auto push4 = createMplsAction(pushCode, folly::none, std::vector<int32_t>{4});
+  auto push24 =
+      createMplsAction(pushCode, folly::none, std::vector<int32_t>{2, 4});
+  auto push34 =
+      createMplsAction(pushCode, folly::none, std::vector<int32_t>{3, 4});
+  auto push43 =
+      createMplsAction(pushCode, folly::none, std::vector<int32_t>{4, 3});
+  auto push13 =
+      createMplsAction(pushCode, folly::none, std::vector<int32_t>{1, 3});
+  auto push42 =
+      createMplsAction(pushCode, folly::none, std::vector<int32_t>{4, 2});
+  auto push12 =
+      createMplsAction(pushCode, folly::none, std::vector<int32_t>{1, 2});
+  auto push31 =
+      createMplsAction(pushCode, folly::none, std::vector<int32_t>{3, 1});
+  auto push21 =
+      createMplsAction(pushCode, folly::none, std::vector<int32_t>{2, 1});
+
+  // validate router 1
+  EXPECT_EQ(
+      routeMap[make_pair("1", toString(v4Enabled ? addr4V4 : addr4))],
+      NextHops({createNextHopFromAdj(adj14, v4Enabled, 10, folly::none, true),
+                createNextHopFromAdj(adj12, v4Enabled, 20, push4, true),
+                createNextHopFromAdj(adj13, v4Enabled, 20, push4, true)}));
+
+  EXPECT_EQ(
+      routeMap[make_pair("1", std::to_string(adjacencyDb4.nodeLabel))],
+      NextHops({createNextHopFromAdj(adj14, false, 10, labelPhpAction)}));
+
+  EXPECT_EQ(
+      routeMap[make_pair("1", toString(v4Enabled ? addr3V4 : addr3))],
+      NextHops({createNextHopFromAdj(adj13, v4Enabled, 10, folly::none, true),
+                createNextHopFromAdj(adj12, v4Enabled, 20, push3, true),
+                createNextHopFromAdj(adj14, v4Enabled, 20, push3, true)}));
+  // EXPECT_EQ(
+  //     routeMap[make_pair("1", std::to_string(adjacencyDb3.nodeLabel))],
+  //     NextHops({createNextHopFromAdj(adj13, false, 10, labelPhpAction)}));
+  //
+  EXPECT_EQ(
+      routeMap[make_pair("1", toString(v4Enabled ? addr2V4 : addr2))],
+      NextHops({createNextHopFromAdj(adj12, v4Enabled, 10, folly::none, true),
+                createNextHopFromAdj(adj13, v4Enabled, 20, push2, true),
+                createNextHopFromAdj(adj14, v4Enabled, 20, push2, true)}));
+  // EXPECT_EQ(
+  //     routeMap[make_pair("1", std::to_string(adjacencyDb2.nodeLabel))],
+  //     NextHops({createNextHopFromAdj(adj12, false, 10, labelPhpAction)}));
+
+  validatePopLabelRoute(routeMap, "1", adjacencyDb1.nodeLabel);
+  validateAdjLabelRoutes(routeMap, "1", adjacencyDb1.adjacencies);
+
+  adjacencyDb3.isOverloaded = true;
+  EXPECT_TRUE(spfSolver->updateAdjacencyDatabase(adjacencyDb3).first);
+  routeMap = getRouteMap(*spfSolver, {"1"});
+
+  EXPECT_EQ(
+      routeMap[make_pair("1", toString(v4Enabled ? addr4V4 : addr4))],
+      NextHops({createNextHopFromAdj(adj14, v4Enabled, 10, folly::none, true),
+                createNextHopFromAdj(adj12, v4Enabled, 20, push4, true)}));
 }
 
 //
@@ -2723,7 +2903,6 @@ TEST_P(ParallelAdjRingTopologyFixture, Ksp2EdEcmp) {
   auto push21 =
       createMplsAction(pushCode, folly::none, std::vector<int32_t>{2, 1});
 
-  //
   // Verify parallel link case between node-1 and node-2
   auto routeMap = getRouteMap(*spfSolver, {"1"});
 
@@ -2732,6 +2911,65 @@ TEST_P(ParallelAdjRingTopologyFixture, Ksp2EdEcmp) {
       NextHops({createNextHopFromAdj(adj12_1, false, 11, folly::none, true),
                 createNextHopFromAdj(adj12_2, false, 11, folly::none, true),
                 createNextHopFromAdj(adj12_3, false, 20, folly::none, true)}));
+
+  auto prefixDBs = spfSolver->getPrefixDatabases();
+  auto prefixDBFour = prefixDBs["4"];
+
+  // start to test minNexthop feature by injecting an ondeman prefix with
+  // threshold to be 4 at the beginning.
+  auto newPrefix = createPrefixEntry(
+      bgpAddr1,
+      thrift::PrefixType::LOOPBACK,
+      "",
+      thrift::PrefixForwardingType::SR_MPLS,
+      thrift::PrefixForwardingAlgorithm::KSP2_ED_ECMP,
+      folly::none,
+      folly::none,
+      folly::make_optional<int64_t>(4));
+
+  prefixDBFour.prefixEntries.push_back(newPrefix);
+  spfSolver->updatePrefixDatabase(prefixDBFour);
+  routeMap = getRouteMap(*spfSolver, {"1"});
+
+  // in theory, kspf will choose adj12_2, adj13_1 as nexthops,
+  // but since we set threhold to be 4, this route will get ignored.
+  EXPECT_EQ(routeMap.find(make_pair("1", toString(bgpAddr1))), routeMap.end());
+
+  // updating threshold hold to be 2.
+  // becasue we use edge disjoint algorithm, we should expect adj12_2 and
+  // adj13_1 as nexthop
+  prefixDBFour.prefixEntries.pop_back();
+  newPrefix.minNexthop = folly::make_optional<int64_t>(2);
+  prefixDBFour.prefixEntries.push_back(newPrefix);
+  spfSolver->updatePrefixDatabase(prefixDBFour);
+  routeMap = getRouteMap(*spfSolver, {"1"});
+  EXPECT_EQ(
+      routeMap[make_pair("1", toString(bgpAddr1))],
+      NextHops({createNextHopFromAdj(adj12_2, false, 22, push4, true),
+                createNextHopFromAdj(adj13_1, false, 22, push4, true)}));
+
+  for (const auto& nexthop : routeMap[make_pair("1", toString(bgpAddr1))]) {
+    LOG(INFO) << (toString(nexthop));
+  }
+
+  // Let node 3 announcing same prefix with limit 4. In this case,
+  // threshold should be 4 instead of 2. And the ip is an anycast from node
+  // 3 and 4. so nexthops should be adj12_2, adj13_1(shortes to node 4)
+  // and adj13_1 shortest to node 3. The second shortes are all eliminated
+  // becasue of purging logic we have for any cast ip.
+  auto prefixDBThr = prefixDBs["3"];
+  newPrefix.minNexthop = folly::make_optional<int64_t>(4);
+  prefixDBThr.prefixEntries.push_back(newPrefix);
+  spfSolver->updatePrefixDatabase(prefixDBThr);
+  routeMap = getRouteMap(*spfSolver, {"1"});
+
+  EXPECT_EQ(routeMap.find(make_pair("1", toString(bgpAddr1))), routeMap.end());
+
+  // Revert the setup to normal state
+  prefixDBFour.prefixEntries.pop_back();
+  prefixDBThr.prefixEntries.pop_back();
+  spfSolver->updatePrefixDatabase(prefixDBFour);
+  spfSolver->updatePrefixDatabase(prefixDBThr);
 
   //
   // Bring down adj12_2 and adj34_2 to make our nexthop validations easy
@@ -2883,11 +3121,17 @@ TEST_P(ParallelAdjRingTopologyFixture, Ksp2EdEcmpForBGP) {
   EXPECT_EQ(routeMap.find(make_pair("3", toString(addr1))), routeMap.end());
 
   // decrease mv for the second node, now router 3 should point to 1
+  // also set the threshold hold on non-best node to be 4. Threshold
+  // on best node is 2. In such case, we should allow the route to be
+  // programmed and announced.
   prefixDBTwo.prefixEntries.back()
       .mv.value()
       .metrics[numMetrics - 1]
       .metric.front()--;
+  prefixDBTwo.prefixEntries.back().minNexthop = 4;
+  prefixDBOne.prefixEntries.back().minNexthop = 2;
   spfSolver->updatePrefixDatabase(prefixDBTwo);
+  spfSolver->updatePrefixDatabase(prefixDBOne);
   routeMap = getRouteMap(*spfSolver, {"3"});
 
   // validate router 3
@@ -2895,6 +3139,23 @@ TEST_P(ParallelAdjRingTopologyFixture, Ksp2EdEcmpForBGP) {
       routeMap[make_pair("3", toString(addr1))],
       NextHops({createNextHopFromAdj(adj31_1, false, 11, folly::none, true),
                 createNextHopFromAdj(adj34_1, false, 33, push12, true)}));
+
+  // node 1 is the preferred node. Set threshold on Node 1 to be 4.
+  // threshold on  node 2 is 2. In such case, threshold should be respected
+  // and we should not program/annouce any routes
+  prefixDBTwo.prefixEntries.back().minNexthop = 2;
+  prefixDBOne.prefixEntries.back().minNexthop = 4;
+  spfSolver->updatePrefixDatabase(prefixDBTwo);
+  spfSolver->updatePrefixDatabase(prefixDBOne);
+  routeMap = getRouteMap(*spfSolver, {"3"});
+
+  // validate router 3
+  EXPECT_EQ(routeMap.find(make_pair("3", toString(addr1))), routeMap.end());
+  // reset min nexthop to rest of checks
+  prefixDBTwo.prefixEntries.back().minNexthop = folly::none;
+  prefixDBOne.prefixEntries.back().minNexthop = folly::none;
+  spfSolver->updatePrefixDatabase(prefixDBTwo);
+  spfSolver->updatePrefixDatabase(prefixDBOne);
 
   // decrease mv for the second node, now router 3 should point to 2
   prefixDBTwo.prefixEntries.back()
@@ -3567,15 +3828,37 @@ class DecisionTestFixture : public ::testing::Test {
     for (const auto& prefix : prefixes) {
       prefixEntries.emplace_back(createPrefixEntry(prefix));
     }
-    return thrift::Value(
-        FRAGILE,
+    return createThriftValue(
         version,
-        "originator-1",
+        node,
         fbzmq::util::writeThriftObjStr(
             createPrefixDb(node, prefixEntries), serializer),
         Constants::kTtlInfinity /* ttl */,
         0 /* ttl version */,
         0 /* hash */);
+  }
+
+  std::unordered_map<std::string, thrift::Value>
+  createPerPrefixKeyValue(
+      const string& node,
+      int64_t version,
+      const vector<thrift::IpPrefix>& prefixes) {
+    std::unordered_map<std::string, thrift::Value> keyVal{};
+    for (const auto& prefix : prefixes) {
+      const auto prefixKey = PrefixKey(
+          node,
+          folly::IPAddress::createNetwork(toString(prefix)),
+          thrift::KvStore_constants::kDefaultArea());
+      keyVal[prefixKey.getPrefixKey()] = createThriftValue(
+          version,
+          node,
+          fbzmq::util::writeThriftObjStr(
+              createPrefixDb(node, {createPrefixEntry(prefix)}), serializer),
+          Constants::kTtlInfinity /* ttl */,
+          0 /* ttl version */,
+          0 /* hash */);
+    }
+    return keyVal;
   }
 
   std::unordered_map<std::string, int64_t>
@@ -4561,6 +4844,104 @@ TEST_F(DecisionTestFixture, DecisionSubReliability) {
   EXPECT_EQ(1, counters["decision.path_build_runs.count.0"]);
   EXPECT_EQ(adjUpdateCnt, counters["decision.adj_db_update.count.0"]);
   EXPECT_EQ(prefixUpdateCnt, counters["decision.prefix_db_update.count.0"]);
+}
+
+/*
+ * The following topology is used:
+ *
+ * 1---2
+ *
+ * Test case to test if old prefix key expiry does not delete prefixes from
+ * FIB when migrating from old prefix key format to 'per prefix key' format
+ *
+ *  node1 [old key format]   ------- node2 [prefix:node1 {p1, p2, p3}]
+ *
+ *  now change node1 to 'per prefix key'
+ *
+ *  node1 [per prefix key]   ------- node2 [prefix:node1 {p1, p2, p3},
+ *                                          prefix:node1:p1,
+ *                                          prefix:node1:p2,
+ *                                          prefix:node1:p3]
+ *
+ *  "prefix:node1 {p1, p2, p3}" -- will expire, but p1, p2, p3 shouldn't be
+ *  removed from decision.
+ */
+
+TEST_F(DecisionTestFixture, PerPrefixKeyExpiry) {
+  //
+  // publish the link state info to KvStore
+  //
+
+  auto publication0 = createThriftPublication(
+      {{"adj:1", createAdjValue("1", 1, {adj12})},
+       {"adj:2", createAdjValue("2", 1, {adj21})},
+       {"prefix:1", createPrefixValue("1", 1, {addr1})},
+       {"prefix:2",
+        createPrefixValue("2", 1, {addr2, addr5, addr6, addr1V4, addr4V4})}},
+      {},
+      {},
+      {},
+      std::string(""));
+  auto routeDbBefore = dumpRouteDb({"1"})["1"];
+  sendKvPublication(publication0);
+  auto routeDbDelta = recvMyRouteDb(decisionPub, "1", serializer);
+  EXPECT_EQ(5, routeDbDelta.unicastRoutesToUpdate.size());
+  auto routeDb = dumpRouteDb({"1"})["1"];
+  auto routeDelta = findDeltaRoutes(routeDb, routeDbBefore);
+  EXPECT_TRUE(checkEqualRoutesDelta(routeDbDelta, routeDelta));
+
+  RouteMap routeMap;
+  fillRouteMap("1", routeMap, routeDb);
+
+  EXPECT_EQ(
+      routeMap[make_pair("1", toString(addr2))],
+      NextHops({createNextHopFromAdj(adj12, false, 10)}));
+  EXPECT_EQ(
+      routeMap[make_pair("1", toString(addr5))],
+      NextHops({createNextHopFromAdj(adj12, false, 10)}));
+  EXPECT_EQ(
+      routeMap[make_pair("1", toString(addr6))],
+      NextHops({createNextHopFromAdj(adj12, false, 10)}));
+  EXPECT_EQ(
+      routeMap[make_pair("1", toString(addr1V4))],
+      NextHops({createNextHopFromAdj(adj12, true, 10)}));
+  EXPECT_EQ(
+      routeMap[make_pair("1", toString(addr4V4))],
+      NextHops({createNextHopFromAdj(adj12, true, 10)}));
+
+  // expire prefix:2, must delete all 5 routes
+  auto publication =
+      createThriftPublication({}, {"prefix:2"}, {}, {}, std::string(""));
+  sendKvPublication(publication);
+  routeDbDelta = recvMyRouteDb(decisionPub, "1", serializer);
+  EXPECT_EQ(0, routeDbDelta.unicastRoutesToUpdate.size());
+  EXPECT_EQ(5, routeDbDelta.unicastRoutesToDelete.size());
+
+  // add 5 routes using old foramt
+  sendKvPublication(publication0);
+  routeDbDelta = recvMyRouteDb(decisionPub, "1", serializer);
+  EXPECT_EQ(5, routeDbDelta.unicastRoutesToUpdate.size());
+
+  // re-add 4 routes using per prefix key format, one of the old key must
+  // be deleted
+  auto perPrefixKeyValue =
+      createPerPrefixKeyValue("2", 1, {addr2, addr6, addr1V4, addr4V4});
+  publication =
+      createThriftPublication(perPrefixKeyValue, {}, {}, {}, std::string(""));
+  sendKvPublication(publication);
+  routeDbDelta = recvMyRouteDb(decisionPub, "1", serializer);
+  EXPECT_EQ(0, routeDbDelta.unicastRoutesToUpdate.size());
+  EXPECT_EQ(1, routeDbDelta.unicastRoutesToDelete.size());
+
+  auto routeDb1 = dumpRouteDb({"1"})["1"];
+  // again send expire 'prefix:2' key, this time there shouldn't be any updates
+  // in add or delete routes.
+  LOG(INFO) << "Sending prefix key expiry";
+  publication =
+      createThriftPublication({}, {"prefix:2"}, {}, {}, std::string(""));
+  sendKvPublication(publication);
+  auto routeDb2 = dumpRouteDb({"1"})["1"];
+  EXPECT_EQ(routeDb1, routeDb2);
 }
 
 int

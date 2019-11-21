@@ -240,6 +240,10 @@ struct PrefixEntry {
   5: optional bool ephemeral
   // Metric vector for externally injected routes into openr
   6: optional MetricVector mv
+  // If the # of nethops for this prefix is below certain threshold, Decision
+  // will not program/anounce the routes. If this parameter is not set, Decision
+  // will not do extra check # of nexthops.
+  8: optional i64 minNexthop
 }
 
 // all prefixes that are bound to a given router
@@ -254,4 +258,7 @@ struct PrefixDatabase {
 
   // Optional attribute to measure convergence performance
   4: optional PerfEvents perfEvents;
+  // Set to true if prefix was added by 'per prefix key' format.
+  // this value is local to the node, and not used by remote nodes
+  6: optional bool perPrefixKey
 }

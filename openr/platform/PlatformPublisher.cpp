@@ -20,6 +20,7 @@
 #include <openr/common/NetworkUtil.h>
 #include <openr/if/gen-cpp2/Network_types.h>
 
+using apache::thrift::CompactSerializer;
 using apache::thrift::FRAGILE;
 
 namespace openr {
@@ -40,7 +41,7 @@ PlatformPublisher::PlatformPublisher(
 }
 
 void
-PlatformPublisher::publishLinkEvent(const thrift::LinkEntry& link) const {
+PlatformPublisher::publishLinkEvent(const thrift::LinkEntry& link) {
   // advertise change of link, prompting subscriber modules to
   // take immediate action
   thrift::PlatformEvent msg;
@@ -50,7 +51,7 @@ PlatformPublisher::publishLinkEvent(const thrift::LinkEntry& link) const {
 }
 
 void
-PlatformPublisher::publishAddrEvent(const thrift::AddrEntry& address) const {
+PlatformPublisher::publishAddrEvent(const thrift::AddrEntry& address) {
   // advertise change of address, prompting subscriber modules to
   // take immediate action
   thrift::PlatformEvent msg;
@@ -60,8 +61,7 @@ PlatformPublisher::publishAddrEvent(const thrift::AddrEntry& address) const {
 }
 
 void
-PlatformPublisher::publishNeighborEvent(
-    const thrift::NeighborEntry& neighbor) const {
+PlatformPublisher::publishNeighborEvent(const thrift::NeighborEntry& neighbor) {
   // advertise change of neighbor, prompting subscriber modules to
   // take immediate action
   thrift::PlatformEvent msg;
@@ -71,8 +71,7 @@ PlatformPublisher::publishNeighborEvent(
 }
 
 void
-PlatformPublisher::publishPlatformEvent(
-    const thrift::PlatformEvent& msg) const {
+PlatformPublisher::publishPlatformEvent(const thrift::PlatformEvent& msg) {
   VLOG(3) << "Publishing PlatformEvent...";
   thrift::PlatformEventType eventType = msg.eventType;
   // send header of event in the first 2 byte
@@ -105,10 +104,13 @@ PlatformPublisher::addrEventFunc(
     const std::string& ifName,
     const openr::fbnl::IfAddress& addrEntry) noexcept {
   VLOG(4) << "Handling Address Event in NetlinkSystemHandler...";
+  thrift::IpPrefix prefix{};
   publishAddrEvent(thrift::AddrEntry(
       FRAGILE,
       ifName,
-      toIpPrefix(addrEntry.getPrefix().value()),
+      addrEntry.getPrefix().hasValue()
+          ? toIpPrefix(addrEntry.getPrefix().value())
+          : prefix,
       addrEntry.isValid()));
 }
 
@@ -121,7 +123,9 @@ PlatformPublisher::neighborEventFunc(
       FRAGILE,
       ifName,
       toBinaryAddress(neighborEntry.getDestination()),
-      neighborEntry.getLinkAddress().value().toString(),
+      neighborEntry.getLinkAddress().hasValue()
+          ? neighborEntry.getLinkAddress().value().toString()
+          : "",
       neighborEntry.isReachable()));
 }
 

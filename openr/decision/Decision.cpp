@@ -283,6 +283,10 @@ class SpfSolver::SpfSolverImpl {
       bool const hasBgp,
       bool const useKsp2EdAlgo);
 
+  folly::Optional<int64_t> getMinNextHopThreshold(
+      BestPathCalResult nodes,
+      std::unordered_map<std::string, thrift::PrefixEntry> const& nodePrefixes);
+
   // helper to filter overloaded nodes for anycast addresses
   BestPathCalResult maybeFilterDrainedNodes(BestPathCalResult&& result) const;
 
@@ -300,7 +304,8 @@ class SpfSolver::SpfSolverImpl {
       BestPathCalResult const& bestPathCalResult,
       const std::unordered_map<
           std::string,
-          std::vector<std::pair<Path, Metric>>>& routeToNodes);
+          std::vector<std::pair<Path, Metric>>>& routeToNodes,
+      std::unordered_map<std::string, thrift::PrefixEntry> const& nodePrefixes);
 
   // Give source node-name and dstNodeNames, this function returns the set of
   // nexthops (along with LFA if enabled) towards these set of dstNodeNames
@@ -581,9 +586,11 @@ SpfSolver::SpfSolverImpl::traceEdgeDisjointPaths(
       // spur node and nbrnode is still up. For example,
       // if spurnode is overloaded, and the only link between
       // nbrnode and rest of graph is through spurnode.
+      // if neighbor node is over loaded skip it.
       auto& nbrName = link->getOtherNodeName(spurNode);
       if (!link->isUp() or linksToIgnore.count(link) or
-          spfResult.find(nbrName) == spfResult.end()) {
+          spfResult.find(nbrName) == spfResult.end() or
+          linkState_.isNodeOverloaded(nbrName)) {
         continue;
       }
       auto& nbrIface = link->getIfaceFromNode(nbrName);
@@ -747,8 +754,12 @@ SpfSolver::SpfSolverImpl::buildRouteDb(const std::string& myNodeName) {
   auto routeToNodes = createOpenRKsp2EdRouteForNodes(myNodeName, nodesForKsp);
 
   for (const auto& kv : prefixToPerformKsp) {
-    auto unicastRoute =
-        selectKsp2Routes(kv.first, myNodeName, kv.second, routeToNodes);
+    auto unicastRoute = selectKsp2Routes(
+        kv.first,
+        myNodeName,
+        kv.second,
+        routeToNodes,
+        prefixState_.prefixes().at(kv.first));
     if (unicastRoute.hasValue()) {
       routeDb.unicastRoutes.emplace_back(std::move(unicastRoute.value()));
     }
@@ -883,10 +894,33 @@ SpfSolver::SpfSolverImpl::getBestAnnouncingNodes(
       findDstNodesForBgpRoute(myNodeName, prefix, nodePrefixes, isV4);
   if (bestPathCalRes.success && (not bestPathCalRes.nodes.count(myNodeName))) {
     return maybeFilterDrainedNodes(std::move(bestPathCalRes));
+  } else if (not bestPathCalRes.success) {
+    LOG(WARNING) << "No route to BGP prefix " << toString(prefix);
+    tData_.addStatValue("decision.no_route_to_prefix", 1, fbzmq::COUNT);
+  } else {
+    VLOG(2) << "Ignoring route to BGP prefix " << toString(prefix)
+            << ". Best path originated by self.";
   }
-  LOG(WARNING) << "No route to BGP prefix " << toString(prefix);
-  tData_.addStatValue("decision.no_route_to_prefix", 1, fbzmq::COUNT);
+
   return dstNodes;
+}
+
+folly::Optional<int64_t>
+SpfSolver::SpfSolverImpl::getMinNextHopThreshold(
+    BestPathCalResult nodes,
+    std::unordered_map<std::string, thrift::PrefixEntry> const& nodePrefixes) {
+  folly::Optional<int64_t> maxMinNexthopForPrefix = folly::none;
+  for (const auto& node : nodes.nodes) {
+    auto npKv = nodePrefixes.find(node);
+    if (npKv != nodePrefixes.end()) {
+      maxMinNexthopForPrefix = npKv->second.minNexthop.hasValue() &&
+              (not maxMinNexthopForPrefix.has_value() ||
+               npKv->second.minNexthop.value() > maxMinNexthopForPrefix.value())
+          ? npKv->second.minNexthop.value()
+          : maxMinNexthopForPrefix;
+    }
+  }
+  return maxMinNexthopForPrefix;
 }
 
 BestPathCalResult
@@ -1082,7 +1116,7 @@ SpfSolver::SpfSolverImpl::createBGPRoute(
                               std::move(allNextHops),
                               thrift::PrefixType::BGP,
                               *(dstInfo.bestData),
-                              bgpDryRun_, /* doNotProgram */
+                              bgpDryRun_, /* doNotInstall */
                               bestNextHop.at(0)};
 }
 
@@ -1092,7 +1126,8 @@ SpfSolver::SpfSolverImpl::selectKsp2Routes(
     const string& myNodeName,
     BestPathCalResult const& bestPathCalResult,
     const std::unordered_map<std::string, std::vector<std::pair<Path, Metric>>>&
-        routeToNodes) {
+        routeToNodes,
+    std::unordered_map<std::string, thrift::PrefixEntry> const& nodePrefixes) {
   thrift::UnicastRoute route;
   route.dest = prefix;
 
@@ -1101,8 +1136,8 @@ SpfSolver::SpfSolverImpl::selectKsp2Routes(
   // get the shortest
   std::vector<std::pair<Path, Metric>> shortestRoutes;
   std::vector<std::pair<Path, Metric>> secShortestRoutes;
-  std::pair<Path, Metric> bestPath;
 
+  // find shortest and sec shortest routes.
   for (const auto& node : bestPathCalResult.nodes) {
     auto routesIter = routeToNodes.find(node);
     if (routesIter == routeToNodes.end()) {
@@ -1117,11 +1152,6 @@ SpfSolver::SpfSolverImpl::selectKsp2Routes(
     for (const auto& path : routeToNodes.at(node)) {
       if (path.second == min_cost) {
         shortestRoutes.push_back(path);
-        // Openr need to redistribute route to BGP, we should choose shortest
-        // path to the best node from BGP perspective.
-        if (node == bestPathCalResult.bestNode) {
-          bestPath = path;
-        }
         continue;
       }
       secShortestRoutes.push_back(path);
@@ -1130,6 +1160,7 @@ SpfSolver::SpfSolverImpl::selectKsp2Routes(
 
   paths.reserve(shortestRoutes.size() + secShortestRoutes.size());
   paths.insert(paths.end(), shortestRoutes.begin(), shortestRoutes.end());
+
   // when get to second shortes routes, we want to make sure the shortest route
   // is not part of second shortest route to avoid double spraying issue
   for (const auto& secPath : secShortestRoutes) {
@@ -1186,6 +1217,18 @@ SpfSolver::SpfSolverImpl::selectKsp2Routes(
         mplsAction,
         true /* useNonShortestRoute */));
   }
+
+  // if we have set minNexthop for prefix and # of nexthop didn't meet the
+  // the threshold, we will ignore this route.
+  auto minNextHop = getMinNextHopThreshold(bestPathCalResult, nodePrefixes);
+  if (minNextHop.has_value() &&
+      (minNextHop.value() > static_cast<int64_t>(route.nextHops.size()))) {
+    LOG(WARNING) << "Dropping routes to " << toString(prefix) << " because of "
+                 << route.nextHops.size() << " of nexthops is smaller than "
+                 << minNextHop.value() << " /n route: /n" << toString(route);
+    return folly::none;
+  }
+
   if (bestPathCalResult.bestData != nullptr) {
     auto bestNextHop = prefixState_.getLoopbackVias(
         {bestPathCalResult.bestNode},
@@ -1797,6 +1840,8 @@ Decision::updateNodePrefixDatabase(
   thrift::PrefixDatabase nodePrefixDb;
   nodePrefixDb.thisNodeName = nodeName;
   nodePrefixDb.perfEvents = prefixDb.perfEvents;
+  nodePrefixDb.perPrefixKey = true;
+
   // create and return prefixDB for the node
   for (const auto& prefix : nodePrefixEntries) {
     nodePrefixDb.prefixEntries.emplace_back(prefix.second);
